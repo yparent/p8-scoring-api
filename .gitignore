@@ -1,0 +1,52 @@
+# ---------- Python ----------
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+.venv/
+venv/
+.pytest_cache/
+.coverage
+htmlcov/
+coverage.xml
+.ipynb_checkpoints/
+
+# ---------- Donnees volumineuses ----------
+data/
+*.csv
+*.parquet
+*.zip
+
+# EXCEPTIONS : ces trois artefacts DOIVENT etre versionnes.
+!data/
+data/raw/
+data/processed/
+!data/clients_sample.parquet
+!data/reference/
+!data/reference/reference.parquet
+
+# ---------- MLflow ----------
+mlruns/
+mlartifacts/
+mlflow.db
+
+# ---------- Logs de production (locaux) ----------
+logs/
+*.jsonl
+
+# ---------- Secrets ----------
+.env
+*.token
+.streamlit/secrets.toml
+
+# ---------- Rapports generes ----------
+monitoring/reports/*.html
+monitoring/production_logs*.parquet
+
+# ---------- Systeme et editeurs ----------
+Thumbs.db
+.DS_Store
+.vscode/
+.idea/

@@ -1,0 +1,25 @@
+-r requirements.txt
+
+# Tests
+pytest==9.1.1
+pytest-cov==7.1.0
+httpx==0.28.1
+
+# Monitoring et analyse
+evidently==0.7.21
+streamlit==1.62.0
+plotly==5.24.1
+matplotlib==3.11.1
+seaborn==0.13.2
+
+# Optimisation
+onnx==1.22.0
+ml_dtypes==0.6.0
+onnxruntime==1.29.0
+onnxmltools==1.16.0
+skl2onnx==1.20.0
+
+# Notebooks
+jupyter==1.1.1
+notebook==7.5.1
+requests==2.34.2

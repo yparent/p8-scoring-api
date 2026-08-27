@@ -17,10 +17,10 @@ short_description: API de scoring credit (FastAPI + LightGBM), projet MLOps
 > Suite du projet 6 *Initiez-vous au MLOps*, où le modèle a été développé,
 > optimisé et versionné avec MLflow.
 
-[![CI/CD](https://github.com/<pseudo>/p8-scoring-api/actions/workflows/ci-cd.yml/badge.svg)](https://github.com/<pseudo>/p8-scoring-api/actions)
+[![CI/CD](https://github.com/yparent/p8-scoring-api/actions/workflows/ci-cd.yml/badge.svg)](https://github.com/yparent/p8-scoring-api/actions)
 
-**API en production :** https://\<pseudo\>-p8-scoring-api.hf.space
-**Documentation interactive :** https://\<pseudo\>-p8-scoring-api.hf.space/docs
+**API en production :** https://yparent-p8-scoring-api.hf.space
+**Documentation interactive :** https://yparent-p8-scoring-api.hf.space/docs
 
 ---
 
@@ -36,16 +36,20 @@ collecte des données de production et détection de dérive.
 ## 2. Architecture
 
 ```
-GitHub  ──push──►  GitHub Actions  ──►  Hugging Face Space (Docker)
-                   test → build → deploy         │ API FastAPI
-                                                 │
-                                          logs JSONL (5 min)
-                                                 ▼
-                                    HF Dataset (privé, persistant)
-                                                 │
-                                    ┌────────────┴────────────┐
-                                    ▼                         ▼
-                        notebook 04 (Evidently)     dashboard Streamlit
+GitHub  ──push──►  GitHub Actions
+                        │
+              test ──► build ──┬──► publish ──► ghcr.io (image amd64 + arm64)
+                               │
+                               └──► deploy  ──► Hugging Face Space (Docker)
+                                                        │ API FastAPI
+                                                        │
+                                                 logs JSONL (5 min)
+                                                        ▼
+                                           HF Dataset (privé, persistant)
+                                                        │
+                                           ┌────────────┴────────────┐
+                                           ▼                         ▼
+                               notebook 04 (Evidently)     dashboard Streamlit
 ```
 
 ## 3. Le modèle
@@ -53,19 +57,27 @@ GitHub  ──push──►  GitHub Actions  ──►  Hugging Face Space (Dock
 | Élément | Valeur |
 |---|---|
 | Algorithme | LightGBM 4.6.0 (optimisé par Optuna au projet 6) |
-| Features | 510, issues de l'agrégation de 10 tables Home Credit |
-| AUC (validation) | 0,79 |
-| Recall sur la classe défaut | 0,67 |
+| Features | **635**, issues de l'agrégation de 10 tables Home Credit |
 | **Seuil métier** | **0,09** |
-| Coût métier | 29 968 (−37,9 % par rapport au seuil 0,5) |
-| Traçabilité | MLflow run `8a3f2c…`, registry `scoring_credit_model` v1 |
+| AUC (validation) | 0,785 |
+| Recall sur la classe défaut | 0,672 |
+| Coût métier au seuil optimal | 29 968 |
+| Traçabilité | MLflow run `5b032d14`, registry `scoring_credit_model` **v2** |
 | Environnement | Python 3.13, scikit-learn 1.9.0, numpy 2.4.6, pandas 3.0.3 |
 | Projet amont | [yparent/projet6-mlops](https://github.com/yparent/projet6-mlops) |
 
 **La règle de décision :** `probabilité ≥ 0,09 → REFUSÉ`, sinon `ACCORDÉ`.
 Ce seuil n'est pas 0,5 : il a été optimisé pour minimiser le coût métier,
 puisqu'accorder un crédit à un mauvais client coûte dix fois plus cher que
-refuser un bon client.
+refuser un bon client. À 0,5, le recall sur la classe défaut s'effondre : le
+modèle n'attraperait presque plus aucun mauvais payeur, sans qu'aucune erreur
+technique ne soit visible nulle part.
+
+Ces trois métriques ne sont pas recopiées à la main : elles sont lues dans
+[`models/metadata.json`](models/metadata.json) (clé `metriques_projet6`), écrit
+par `scripts/export_model.py` à partir de la base de tracking MLflow du projet
+6. La traçabilité entre le modèle entraîné et le modèle servi est portée par ce
+fichier, pas par ce README.
 
 ---
 
@@ -74,7 +86,7 @@ refuser un bon client.
 ### 4.1 En local avec Python
 
 ```bash
-git clone https://github.com/<pseudo>/p8-scoring-api.git
+git clone https://github.com/yparent/p8-scoring-api.git
 cd p8-scoring-api
 
 # Python 3.13 requis (voir .python-version)
@@ -87,20 +99,43 @@ uvicorn app.main:app --reload --port 8000
 
 L'API est sur http://localhost:8000, la documentation sur http://localhost:8000/docs
 
-### 4.2 Avec Docker
+### 4.2 Avec Docker, en construisant l'image
 
 ```bash
 docker build -t scoring-api:latest .
 docker run --rm -p 8000:7860 scoring-api:latest
 ```
 
-### 4.3 Avec docker compose
+### 4.3 Avec l'image déjà publiée (aucune construction)
+
+Chaque push sur `main` publie l'image sur GitHub Container Registry, en
+**amd64 et arm64** — elle tourne donc en natif sur un Mac Apple Silicon comme
+sur un serveur x86 :
 
 ```bash
-docker compose up --build
+docker pull ghcr.io/yparent/p8-scoring-api:latest
+docker run --rm -p 8000:7860 ghcr.io/yparent/p8-scoring-api:latest
 ```
 
-### 4.4 Régénérer les artefacts du modèle depuis MLflow
+Deux étiquettes sont posées : `:latest`, et le **SHA court du commit**,
+immuable — c'est celle-ci qu'on déploie en production et qu'on cite dans un
+rapport d'incident.
+
+### 4.4 Avec docker compose
+
+```bash
+docker compose up --build                        # construit l'image
+docker compose -f docker-compose.ghcr.yml up     # tire l'image publiée
+```
+
+La seconde variante monte `./logs` sur le disque hôte : les journaux JSONL
+alimentent directement le notebook de drift.
+
+> Mode d'emploi complet — rendre le paquet public, tirer une image privée,
+> forcer une architecture, publier sur Docker Hub :
+> [`docs/utiliser_image_docker.md`](docs/utiliser_image_docker.md).
+
+### 4.5 Régénérer les artefacts du modèle depuis MLflow
 
 Si tu repars du projet 6 :
 
@@ -108,7 +143,7 @@ Si tu repars du projet 6 :
 python scripts/export_model.py \
   --mlflow-db "chemin/vers/projet6/notebooks/mlflow.db" \
   --dataset   "chemin/vers/projet6/data/processed/dataset_final.parquet" \
-  --model-name scoring_credit_model --model-version 1
+  --model-name scoring_credit_model --model-version 2
 ```
 
 ---
@@ -132,7 +167,7 @@ python scripts/export_model.py \
 **Scoring par identifiant client :**
 
 ```bash
-curl -X POST https://<pseudo>-p8-scoring-api.hf.space/predict \
+curl -X POST https://yparent-p8-scoring-api.hf.space/predict \
   -H "Content-Type: application/json" \
   -d '{"client_id": 0}'
 ```
@@ -141,7 +176,7 @@ curl -X POST https://<pseudo>-p8-scoring-api.hf.space/predict \
 manquantes — LightGBM les gère nativement) :**
 
 ```bash
-curl -X POST https://<pseudo>-p8-scoring-api.hf.space/predict \
+curl -X POST https://yparent-p8-scoring-api.hf.space/predict \
   -H "Content-Type: application/json" \
   -d '{"features": {"EXT_SOURCE_2": 0.31, "DAYS_BIRTH": -14000, "AMT_CREDIT": 406597.5}}'
 ```
@@ -155,11 +190,11 @@ curl -X POST https://<pseudo>-p8-scoring-api.hf.space/predict \
   "probability_default": 0.041872,
   "threshold": 0.09,
   "decision": "ACCORDE",
-  "model_version": "1",
-  "n_features_fournies": 487,
+  "model_version": "2",
+  "n_features_fournies": 635,
   "features_inconnues": [],
-  "inference_ms": 0.058,
-  "latency_ms": 2.914
+  "inference_ms": 0.11,
+  "latency_ms": 8.6
 }
 ```
 
@@ -194,9 +229,9 @@ Chaque appel à `/predict` produit une ligne JSON dans `/tmp/logs/predictions_AA
   "features": {"EXT_SOURCE_2": 0.31, "...": 0},
   "probability_default": 0.041872,
   "decision": "ACCORDE",
-  "inference_ms": 0.058,
-  "latency_ms": 2.914,
-  "model_version": "1",
+  "inference_ms": 0.11,
+  "latency_ms": 8.6,
+  "model_version": "2",
   "backend": "lightgbm",
   "status": 200
 }
@@ -209,9 +244,13 @@ donnée directement identifiante n'est stockée.
 
 Le système de fichiers d'un Space gratuit est **éphémère**. Les logs sont donc
 poussés toutes les 5 minutes vers un dépôt **Dataset Hugging Face privé**
-(`<pseudo>/p8-production-logs`) par le `CommitScheduler` de `huggingface_hub`.
+(`yparent/p8-production-logs`) par le `CommitScheduler` de `huggingface_hub`.
 Le dépôt est versionné par Git : on dispose gratuitement de l'historique et de
-l'auditabilité.
+l'auditabilité. Les fichiers y sont rangés sous `production_logs/`.
+
+> Le planificateur tourne **dans le conteneur du Space** : seules les
+> prédictions servies par l'API **déployée** y remontent. Du trafic envoyé à
+> `localhost` alimente le dossier `logs/` de la machine locale, pas le Dataset.
 
 ### 6.3 Comment lire les indicateurs
 
@@ -220,7 +259,7 @@ l'auditabilité.
 | Indicateur | Lecture | Seuil d'alerte |
 |---|---|---|
 | `latency_ms.p95` | 95 % des requêtes sont plus rapides | > 100 ms → investiguer |
-| `inference_ms.p95` | temps du modèle seul | > 5 ms → problème modèle |
+| `inference_ms.p95` | temps du modèle seul | > 5 ms → problème modèle (mesuré : 0,25 ms) |
 | `error_rate` | part des requêtes en erreur | > 5 % → alerte |
 
 **Un taux de 422 non nul est normal et sain** : ce sont des requêtes invalides
@@ -252,21 +291,29 @@ défauts se seront matérialisés, plusieurs mois plus tard.
 ### 6.4 Reproduire l'analyse
 
 ```bash
-# 1. Générer du trafic (l'API doit tourner)
-python scripts/simulate_traffic.py --profil stable --n 400
-python scripts/simulate_traffic.py --profil drift --intensite 1.0 --n 400
+# 1. Générer du trafic. Trois profils : stable (témoin), drift (population
+#    modifiée), erreurs (requêtes invalides). L'API doit tourner.
+python scripts/simulate_traffic.py --url http://127.0.0.1:8000 --profil stable  --n 400
+python scripts/simulate_traffic.py --url http://127.0.0.1:8000 --profil drift   --n 400
+python scripts/simulate_traffic.py --url http://127.0.0.1:8000 --profil erreurs --n 150
 
-# 2. Récupérer et consolider les logs
+# 2. Récupérer et consolider les journaux en Parquet
 python scripts/fetch_logs.py --local
-# ou depuis Hugging Face :
-python scripts/fetch_logs.py --repo "<pseudo>/p8-production-logs" --token $HF_TOKEN
+# ou depuis le Dataset Hugging Face :
+python scripts/fetch_logs.py --repo "yparent/p8-production-logs" --token $HF_TOKEN
 
-# 3. Analyser
-jupyter notebook notebooks/04_data_drift.ipynb
+# 3. Analyser — interactif...
+jupyter lab notebooks/04_data_drift.ipynb
+#    ...ou sans navigateur, en écrivant les sorties dans le notebook :
+jupyter nbconvert --to notebook --execute --inplace \
+  --ExecutePreprocessor.timeout=1800 notebooks/04_data_drift.ipynb
 
 # 4. Visualiser
 streamlit run monitoring/dashboard.py
 ```
+
+> Pour alimenter le Dataset de production, viser le Space déployé plutôt que
+> `localhost` : `--url https://yparent-p8-scoring-api.hf.space`.
 
 ---
 
@@ -294,44 +341,98 @@ pytest tests/test_validation.py -v                  # un fichier
 
 ## 8. Pipeline CI/CD
 
-Déclenché à chaque push sur `main` (`.github/workflows/ci-cd.yml`) :
+Déclenché à chaque push sur `main` et sur chaque *pull request* vers `main`
+(`.github/workflows/ci-cd.yml`) :
 
 | Job | Contenu | Condition |
 |---|---|---|
-| `test` | pytest + couverture, contrôle des artefacts du modèle | toujours |
-| `build` | build Docker + test de fumée (health, predict, validation 422) | `needs: test` |
-| `deploy` | push vers le Space HF + vérification post-déploiement | `needs: [test, build]` et branche `main` |
+| `test` | ruff, pytest + couverture, contrôle des artefacts du modèle | toujours |
+| `build` | build Docker + test de fumée (`/health`, `/predict`, validation 422) | `needs: test` |
+| `publish` | publication de l'image sur `ghcr.io`, en amd64 **et** arm64 | `needs: [test, build]`, branche `main` |
+| `deploy` | téléversement vers le Space HF + vérification post-déploiement | `needs: [test, build]`, branche `main` |
 
 L'enchaînement par `needs:` garantit qu'**aucune version ne part en production
-sans que les tests soient passés**.
+sans que les tests soient passés**. Sur une *pull request*, `test` et `build`
+s'exécutent, `publish` et `deploy` sont ignorés : le pipeline valide sans
+déployer.
+
+`publish` et `deploy` sont deux jobs **distincts et parallèles**, volontairement :
+un registre indisponible ne doit pas empêcher la mise en ligne, et
+réciproquement.
+
+### Gestion des secrets
+
+| Secret / variable | Où | Usage |
+|---|---|---|
+| `HF_TOKEN`, `HF_USERNAME`, `HF_SPACE_NAME` | secrets GitHub Actions | téléversement vers le Space |
+| `GITHUB_TOKEN` | fourni automatiquement par Actions | publication sur `ghcr.io` — **aucun secret à créer ni à faire tourner** |
+| `HF_TOKEN`, `HF_DATASET_REPO` | *Settings* du Space | poussée des journaux vers le Dataset |
+
+Aucun jeton n'apparaît dans le dépôt ni dans les journaux d'exécution.
+
+### Note d'exploitation : le stockage des artefacts binaires
+
+Le `.gitattributes` déposé sur le Space déclare `model.pkl`, `model.onnx` et
+les `.parquet` avec le filtre **`lfs`** — et non `xet`. Xet est le backend de
+*stockage* du Hub, mais côté Git le protocole reste celui de LFS : un filtre
+inconnu laisse un **fichier pointeur texte** dans le conteneur de build, et
+l'API meurt au démarrage sur `KeyError: 118` (118 = `ord('v')`, le `v` de
+`version https://git-lfs…`). Le job `deploy` relit donc le `.gitattributes`
+**tel qu'il est sur le Space** après téléversement et échoue si la déclaration
+n'est pas conforme. En cas de besoin, `scripts/reparer_space.py` répare et
+vérifie en une commande.
 
 ---
 
 ## 9. Structure du dépôt
 
 ```
-app/          code de l'API (production)
-tests/        suite de tests
-scripts/      export du modèle, simulation, benchmarks, conversion ONNX
-notebooks/    01-03 (projet 6) + 04 analyse de drift
-monitoring/   dashboard Streamlit et rapports générés
-models/       model.pkl, model.onnx, metadata.json
-data/         jeu de référence et échantillon de clients
-docs/         rapport d'optimisation, historique des versions
-.github/      pipeline CI/CD
-Dockerfile    image de production
+app/                       code de l'API (production)
+tests/                     suite de tests
+scripts/                   export du modèle, simulation de trafic, benchmarks,
+                           conversion ONNX, publication d'image, réparation du Space
+notebooks/                 01-03 (projet 6) + 04 analyse de drift
+monitoring/                dashboard Streamlit et rapports générés
+models/                    model.pkl, model.onnx, metadata.json
+data/                      jeu de référence et échantillon de clients
+docs/                      rapport d'optimisation, mode d'emploi Docker,
+                           historique des versions
+.github/workflows/         pipeline CI/CD et job de drift quotidien
+Dockerfile                 image de production
+docker-compose.yml         démarrage local, image construite sur place
+docker-compose.ghcr.yml    démarrage depuis l'image publiée
 ```
 
 ## 10. Performances
 
-| Mesure | Valeur |
-|---|---|
-| Inférence pure p95 | 0,065 ms |
-| Latence API p95 (locale) | 3,1 ms |
-| Débit théorique | ~26 000 prédictions/s |
-| Taille de l'image Docker | 612 Mo |
+Mesures réelles, 635 features, 500 appels par stratégie (`scripts/benchmark.py`) :
 
-Détail complet et méthodologie : [`docs/rapport_optimisation.md`](docs/rapport_optimisation.md).
+| Mesure | Chemin naïf | Retenu | Gain |
+|---|---|---|---|
+| **Inférence p95** | 8,966 ms | **0,253 ms** | **−97,2 %** |
+| Débit d'inférence | 149 /s | 7 693 /s | ×51,6 |
+| **Décisions modifiées** | — | **0** | non-régression prouvée |
+
+Latence HTTP de bout en bout (`scripts/benchmark_http.py`, séquentiel) :
+
+| Contexte | p50 | **p95** | p99 | Part de l'inférence |
+|---|---|---|---|---|
+| Local | 8,6 ms | **13,3 ms** | 15,2 ms | 1,9 % |
+| Production (Space HF) | 105,6 ms | **122,0 ms** | 147,2 ms | **0,21 %** |
+
+**108,7 ms séparent les deux p95 : c'est du réseau, pas du code.** L'API expose
+`latency_ms`, mesuré **côté serveur**, précisément pour permettre de faire cette
+distinction dans n'importe quelle mesure.
+
+Un backend **ONNX Runtime** est implémenté et validé (`model.onnx`, 1,26 Mo,
+écart maximal 3,06 × 10⁻⁷, **100 % des décisions identiques**), ×2,3 sur le p95
+d'inférence. Il n'est **pas** activé par défaut : 0,14 ms de gain sont invisibles
+derrière le réseau, pour trois dépendances et un artefact de plus à déployer.
+Activable par `INFERENCE_BACKEND=onnx` si le profil d'usage bascule vers du
+scoring de masse.
+
+Détail complet, méthodologie et pistes écartées :
+[`docs/rapport_optimisation.md`](docs/rapport_optimisation.md).
 
 ## 10 bis. Note sur MLflow
 
@@ -351,6 +452,12 @@ du projet 6 et les versions exactes des bibliothèques d'entraînement.
 
 - Le magasin de features contient 1 000 clients de démonstration ; une mise en
   production réelle s'appuierait sur un vrai *feature store*.
+- **Un worker uvicorn sature un cœur.** Mesuré à concurrence 1, 4 et 10, le débit
+  reste plat : l'essentiel du travail (validation Pydantic, sérialisation JSON,
+  journalisation) est du Python, sérialisé par le GIL. La concurrence achète de
+  la file d'attente, pas du débit. La montée en charge se fait donc
+  **horizontalement**, par réplication de conteneurs — d'où le choix d'un worker
+  par conteneur.
 - Les données de production sont **simulées** : l'API vient d'être déployée.
 - L'hébergement gratuit se met en veille : le premier appel après inactivité
   peut prendre 30 à 60 secondes (*cold start*).

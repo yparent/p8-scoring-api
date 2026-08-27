@@ -1,0 +1,37 @@
+{
+  "date_analyse": "2026-08-27T08:15:02.317553+00:00",
+  "periode_analysee": {
+    "debut": "2026-08-27 05:58:26.542000+00:00",
+    "fin": "2026-08-27 07:54:07.748000+00:00"
+  },
+  "volumes": {
+    "predictions": 1781,
+    "erreurs": 140,
+    "taux_erreur": 0.0729
+  },
+  "performance": {
+    "latence_p50_ms": 0.72,
+    "latence_p95_ms": 4.7,
+    "latence_p99_ms": 6.27,
+    "inference_p95_ms": 0.384
+  },
+  "data_drift": {
+    "colonnes_analysees": 30,
+    "colonnes_en_derive": 7,
+    "part_en_derive": 0.233,
+    "derive_du_jeu": false,
+    "psi_max": 0.1502,
+    "variables_psi_sup_025": []
+  },
+  "prediction_drift": {
+    "psi_scores": 0.0469,
+    "taux_refus_reference": 0.2717,
+    "taux_refus_production": 0.2965
+  },
+  "verdict": {
+    "niveau": "CRITIQUE",
+    "alertes": [
+      "Taux d'erreur eleve : 7.3 %"
+    ]
+  }
+}

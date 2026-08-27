@@ -14,7 +14,7 @@ import hashlib
 import json
 import logging
 import threading
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -40,7 +40,7 @@ def hacher_identifiant(valeur: Any) -> str:
 def fichier_du_jour() -> Path:
     """Un fichier par jour : facilite la retention et l'analyse par fenetre."""
     config.LOG_DIR.mkdir(parents=True, exist_ok=True)
-    jour = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    jour = datetime.now(UTC).strftime("%Y-%m-%d")
     return config.LOG_DIR / f"predictions_{jour}.jsonl"
 
 
@@ -51,12 +51,11 @@ def journaliser(evenement: dict) -> None:
     try:
         evenement.setdefault(
             "timestamp",
-            datetime.now(timezone.utc).isoformat(timespec="milliseconds"),
+            datetime.now(UTC).isoformat(timespec="milliseconds"),
         )
         ligne = json.dumps(evenement, ensure_ascii=False, default=str)
-        with _verrou:
-            with fichier_du_jour().open("a", encoding="utf-8") as f:
-                f.write(ligne + "\n")
+        with _verrou, fichier_du_jour().open("a", encoding="utf-8") as f:
+            f.write(ligne + "\n")
     except Exception as exc:                          # noqa: BLE001
         # Regle d'or : le monitoring ne doit jamais casser la production.
         logger.warning("Echec d'ecriture du log : %s", exc)

@@ -6,7 +6,6 @@ Couvre explicitement les trois familles de cas critiques
 
 import pytest
 
-
 # --- Famille 1 : types de donnees incorrects -------------------------------
 
 @pytest.mark.parametrize("valeur", ["beaucoup", "abc", [1, 2], {"a": 1}])

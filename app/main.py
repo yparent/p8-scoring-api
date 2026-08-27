@@ -19,8 +19,12 @@ from fastapi.responses import JSONResponse
 from . import config, logging_utils
 from .model_service import service
 from .schemas import (
-    BatchPredictRequest, BatchPredictResponse, ErrorResponse,
-    HealthResponse, PredictRequest, PredictResponse,
+    BatchPredictRequest,
+    BatchPredictResponse,
+    ErrorResponse,
+    HealthResponse,
+    PredictRequest,
+    PredictResponse,
 )
 
 logging.basicConfig(

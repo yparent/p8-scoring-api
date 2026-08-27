@@ -14,7 +14,7 @@ import json
 import pickle
 import platform
 import sqlite3
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import joblib
@@ -249,8 +249,8 @@ def main():
     print(f"  models/model.pkl ({dest.stat().st_size / 1024 / 1024:.2f} Mo)")
 
     print("\n[4/5] Ecriture des metadonnees...")
-    import sklearn
     import lightgbm
+    import sklearn
     metadata = {
         "model_name": args.model_name,
         "model_version": str(version),
@@ -261,7 +261,7 @@ def main():
         "features": features,                  # ORDRE CRITIQUE : ne jamais trier
         "metriques_projet6": metrics,
         "hyperparametres": params,
-        "exported_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "exported_at": datetime.now(UTC).isoformat(timespec="seconds"),
         "environnement": {
             "python": platform.python_version(),
             "scikit_learn": sklearn.__version__,

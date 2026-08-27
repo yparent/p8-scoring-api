@@ -1,0 +1,38 @@
+{
+  "machine": "Windows-11-10.0.26200-SP0",
+  "n": 500,
+  "resultats": {
+    "A_dataframe_predict_proba": {
+      "moyenne_ms": 5.5788,
+      "p50_ms": 5.6888,
+      "p95_ms": 6.6911,
+      "p99_ms": 7.2478,
+      "debit_par_s": 179.3
+    },
+    "B_numpy_predict_proba": {
+      "moyenne_ms": 1.7647,
+      "p50_ms": 1.8463,
+      "p95_ms": 2.1587,
+      "p99_ms": 2.3843,
+      "debit_par_s": 566.7
+    },
+    "C_numpy_booster_natif": {
+      "moyenne_ms": 0.1057,
+      "p50_ms": 0.0984,
+      "p95_ms": 0.1474,
+      "p99_ms": 0.1852,
+      "debit_par_s": 9463.1
+    },
+    "D_onnx_runtime": {
+      "moyenne_ms": 0.0809,
+      "p50_ms": 0.0752,
+      "p95_ms": 0.1079,
+      "p99_ms": 0.1491,
+      "debit_par_s": 12367.1
+    }
+  },
+  "ecarts": {
+    "C_numpy_booster_natif": 0.0,
+    "D_onnx_runtime": 3.059828720952673e-07
+  }
+}

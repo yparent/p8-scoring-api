@@ -123,7 +123,12 @@ jobs:
 
   # ===================================================================
   # JOB 3 - DEPLOIEMENT SUR HUGGING FACE SPACES
-  #   uniquement sur main, et seulement si test ET build ont reussi
+  #   Depuis 2026, Hugging Face refuse les fichiers binaires pousses par
+  #   un "git push" classique : ils doivent passer par le stockage Xet.
+  #   Plutot que d'installer l'extension git-xet sur le runner, on utilise
+  #   l'API huggingface_hub, qui route automatiquement les binaires vers
+  #   Xet grace au paquet hf_xet. C'est plus simple et plus robuste :
+  #   pas d'historique Git a reconcilier, pas de --force.
   # ===================================================================
   deploy:
     name: Deploiement sur Hugging Face Spaces
@@ -131,23 +136,66 @@ jobs:
     needs: [test, build]
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     steps:
-      - name: Recuperer tout l'historique
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0                   # obligatoire pour un push Git complet
-          lfs: true
+      - uses: actions/checkout@v4
 
-      - name: Pousser vers le Space
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Installer le client Hugging Face
+        run: pip install --quiet "huggingface_hub[hf_xet]"
+
+      - name: Televerser vers le Space
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           HF_USERNAME: ${{ secrets.HF_USERNAME }}
           HF_SPACE_NAME: ${{ secrets.HF_SPACE_NAME }}
+          GITHUB_SHA: ${{ github.sha }}
         run: |
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git push --force \
-            "https://${HF_USERNAME}:${HF_TOKEN}@huggingface.co/spaces/${HF_USERNAME}/${HF_SPACE_NAME}" \
-            HEAD:main
+          python - <<'PYTHON'
+          import os
+          from pathlib import Path
+          from huggingface_hub import HfApi
+
+          depot = f"{os.environ['HF_USERNAME']}/{os.environ['HF_SPACE_NAME']}"
+          api = HfApi(token=os.environ["HF_TOKEN"])
+
+          # .gitattributes dedie au Space : declare les binaires en stockage Xet.
+          # Sans ces lignes, le Hub refuse model.pkl et les .parquet.
+          Path(".gitattributes_space").write_text(
+              "*.pkl filter=xet diff=xet merge=xet -text\n"
+              "*.onnx filter=xet diff=xet merge=xet -text\n"
+              "*.parquet filter=xet diff=xet merge=xet -text\n",
+              encoding="utf-8",
+          )
+          api.upload_file(
+              path_or_fileobj=".gitattributes_space",
+              path_in_repo=".gitattributes",
+              repo_id=depot,
+              repo_type="space",
+              commit_message="chore: stockage Xet pour les artefacts binaires",
+          )
+
+          resultat = api.upload_folder(
+              repo_id=depot,
+              repo_type="space",
+              folder_path=".",
+              commit_message=f"Deploiement automatique depuis GitHub Actions ({os.environ['GITHUB_SHA'][:7]})",
+              allow_patterns=[
+                  "app/**",
+                  "models/model.pkl",
+                  "models/metadata.json",
+                  "models/model.onnx",
+                  "data/clients_sample.parquet",
+                  "Dockerfile",
+                  "requirements.txt",
+                  "README.md",
+              ],
+              # Nettoie du Space les fichiers retires du depot
+              delete_patterns=["app/**", "models/**", "data/**"],
+          )
+          print(f"Deploiement envoye : {resultat}")
+          PYTHON
 
       - name: Attendre le redemarrage et verifier
         env:
@@ -156,7 +204,7 @@ jobs:
         run: |
           URL="https://${HF_USERNAME}-${HF_SPACE_NAME}.hf.space/health"
           echo "Verification de $URL"
-          echo "Hugging Face reconstruit l'image : cela prend 2 a 5 minutes."
+          echo "Hugging Face reconstruit l'image : cela prend 2 a 6 minutes."
           for i in $(seq 1 40); do
             if curl -fsS "$URL" | grep -q '"model_loaded":true'; then
               echo "Deploiement verifie apres $((i*15))s"
@@ -166,7 +214,7 @@ jobs:
             sleep 15
           done
           echo "L'API n'a pas repondu dans le delai imparti."
-          echo "Verifie les logs de build sur https://huggingface.co/spaces/${HF_USERNAME}/${HF_SPACE_NAME}"
+          echo "Consulte les logs de build : https://huggingface.co/spaces/${HF_USERNAME}/${HF_SPACE_NAME}"
           exit 1
 
       - name: Recapitulatif

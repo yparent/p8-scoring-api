@@ -127,8 +127,7 @@ jobs:
   #   un "git push" classique : ils doivent passer par le stockage Xet.
   #   Plutot que d'installer l'extension git-xet sur le runner, on utilise
   #   l'API huggingface_hub, qui route automatiquement les binaires vers
-  #   Xet grace au paquet hf_xet. C'est plus simple et plus robuste :
-  #   pas d'historique Git a reconcilier, pas de --force.
+  #   Xet grace au paquet hf_xet.
   # ===================================================================
   deploy:
     name: Deploiement sur Hugging Face Spaces
@@ -160,12 +159,18 @@ jobs:
           depot = f"{os.environ['HF_USERNAME']}/{os.environ['HF_SPACE_NAME']}"
           api = HfApi(token=os.environ["HF_TOKEN"])
 
-          # .gitattributes dedie au Space : declare les binaires en stockage Xet.
-          # Sans ces lignes, le Hub refuse model.pkl et les .parquet.
+          # .gitattributes dedie au Space : declare les binaires comme "gros
+          # fichiers". ATTENTION au nom du filtre : c'est bien "lfs", PAS "xet".
+          # Xet est le backend de STOCKAGE du Hub, mais cote Git le protocole
+          # reste celui de LFS (fichier pointeur "version https://git-lfs...").
+          # Avec un filtre inconnu comme "xet", le conteneur de build recupere
+          # le POINTEUR TEXTE au lieu du binaire, et l'API meurt au demarrage
+          # avec "KeyError: 118" (118 = ord('v'), le 'v' de "version ...").
           Path(".gitattributes_space").write_text(
-              "*.pkl filter=xet diff=xet merge=xet -text\n"
-              "*.onnx filter=xet diff=xet merge=xet -text\n"
-              "*.parquet filter=xet diff=xet merge=xet -text\n",
+              "*.pkl filter=lfs diff=lfs merge=lfs -text\n"
+              "*.onnx filter=lfs diff=lfs merge=lfs -text\n"
+              "*.parquet filter=lfs diff=lfs merge=lfs -text\n"
+              "*.joblib filter=lfs diff=lfs merge=lfs -text\n",
               encoding="utf-8",
           )
           api.upload_file(
@@ -195,6 +200,32 @@ jobs:
               delete_patterns=["app/**", "models/**", "data/**"],
           )
           print(f"Deploiement envoye : {resultat}")
+
+          # -----------------------------------------------------------------
+          # Garde-fou : on relit le .gitattributes tel qu'il est SUR le Space.
+          # C'est lui qui decide si le conteneur de build recevra le vrai
+          # binaire ou un simple pointeur texte. Un filtre inconnu ("xet")
+          # passe silencieusement ici mais tue l'API au demarrage avec
+          # "KeyError: 118". On echoue donc dans la CI, pas en production.
+          # -----------------------------------------------------------------
+          from huggingface_hub import hf_hub_download
+
+          attributs = Path(
+              hf_hub_download(repo_id=depot, repo_type="space",
+                              filename=".gitattributes")
+          ).read_text(encoding="utf-8")
+
+          for motif in ("*.pkl", "*.parquet"):
+              ligne = next(
+                  (l for l in attributs.splitlines() if l.startswith(motif)), ""
+              )
+              if "filter=lfs" not in ligne:
+                  raise SystemExit(
+                      f"ECHEC : sur le Space, {motif} n'est pas declare avec "
+                      f"filter=lfs (ligne lue : {ligne!r}). Le conteneur de "
+                      "build recevrait un pointeur texte au lieu du binaire."
+                  )
+          print("Controle du .gitattributes du Space : OK")
           PYTHON
 
       - name: Attendre le redemarrage et verifier

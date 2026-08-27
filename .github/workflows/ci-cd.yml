@@ -1,0 +1,187 @@
+name: CI/CD - API de scoring
+
+# --- Declencheurs -----------------------------------------------------
+on:
+  push:
+    branches: [main]          # deploiement automatique sur la branche principale
+  pull_request:
+    branches: [main]          # sur une PR : on teste, mais on ne deploie PAS
+  workflow_dispatch:          # bouton "Run workflow" pour un lancement manuel
+
+env:
+  PYTHON_VERSION: "3.13"
+  IMAGE_NAME: scoring-api
+
+jobs:
+
+  # ===================================================================
+  # JOB 1 - QUALITE ET TESTS
+  # ===================================================================
+  test:
+    name: Tests et qualite du code
+    runs-on: ubuntu-latest
+    steps:
+      - name: Recuperer le code
+        uses: actions/checkout@v4
+
+      - name: Installer Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip                       # cache des dependances entre les runs
+
+      - name: Installer les dependances
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Verifier le formatage et la qualite (ruff)
+        run: |
+          pip install ruff
+          ruff check app/ tests/ scripts/ --output-format=github
+        continue-on-error: true            # informatif : ne bloque pas le pipeline
+
+      - name: Verifier la presence des artefacts du modele
+        run: |
+          test -f models/model.pkl     || (echo "model.pkl manquant" && exit 1)
+          test -f models/metadata.json || (echo "metadata.json manquant" && exit 1)
+          python -c "
+          import json
+          m = json.load(open('models/metadata.json'))
+          assert 0 < m['threshold'] < 0.5, 'Seuil metier suspect : ' + str(m['threshold'])
+          assert m['n_features'] > 0
+          print('Artefacts OK - version', m['model_version'], '- seuil', m['threshold'])
+          "
+
+      - name: Lancer les tests avec couverture
+        run: pytest --cov=app --cov-report=xml --cov-report=term -m "not slow"
+
+      - name: Publier le rapport de couverture
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: rapport-couverture
+          path: coverage.xml
+
+  # ===================================================================
+  # JOB 2 - CONSTRUCTION DE L'IMAGE DOCKER
+  #   ne demarre QUE si le job "test" a reussi (needs: test)
+  # ===================================================================
+  build:
+    name: Construction de l'image Docker
+    runs-on: ubuntu-latest
+    needs: test                            # <-- LA GARANTIE DEMANDEE PAR L'ENONCE
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configurer Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Construire l'image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false                      # on ne publie pas sur un registry
+          load: true                       # on la garde en local pour la tester
+          tags: ${{ env.IMAGE_NAME }}:${{ github.sha }}
+          cache-from: type=gha             # cache des couches entre les runs
+          cache-to: type=gha,mode=max
+
+      - name: Test de fumee du conteneur
+        run: |
+          docker run -d --name api-test -p 7860:7860 \
+            ${{ env.IMAGE_NAME }}:${{ github.sha }}
+
+          echo "Attente du demarrage..."
+          for i in $(seq 1 30); do
+            if curl -fsS http://localhost:7860/health > /dev/null 2>&1; then
+              echo "API prete apres ${i}s"; break
+            fi
+            sleep 1
+          done
+
+          echo "--- /health ---"
+          curl -fsS http://localhost:7860/health | tee /tmp/health.json
+          grep -q '"model_loaded":true' /tmp/health.json \
+            || (echo "ECHEC : le modele n'est pas charge" && docker logs api-test && exit 1)
+
+          echo "--- /predict ---"
+          curl -fsS -X POST http://localhost:7860/predict \
+            -H "Content-Type: application/json" \
+            -d '{"client_id": 0}' | tee /tmp/predict.json
+          grep -q '"decision"' /tmp/predict.json \
+            || (echo "ECHEC : pas de decision renvoyee" && exit 1)
+
+          echo "--- validation d'une entree invalide (422 attendu) ---"
+          code=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
+            http://localhost:7860/predict -H "Content-Type: application/json" \
+            -d '{"features": {"DAYS_BIRTH": 5000}}')
+          test "$code" = "422" || (echo "ECHEC : code $code au lieu de 422" && exit 1)
+
+          echo "Test de fumee reussi"
+          docker stop api-test
+
+  # ===================================================================
+  # JOB 3 - DEPLOIEMENT SUR HUGGING FACE SPACES
+  #   uniquement sur main, et seulement si test ET build ont reussi
+  # ===================================================================
+  deploy:
+    name: Deploiement sur Hugging Face Spaces
+    runs-on: ubuntu-latest
+    needs: [test, build]
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    steps:
+      - name: Recuperer tout l'historique
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0                   # obligatoire pour un push Git complet
+          lfs: true
+
+      - name: Pousser vers le Space
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_USERNAME: ${{ secrets.HF_USERNAME }}
+          HF_SPACE_NAME: ${{ secrets.HF_SPACE_NAME }}
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git push --force \
+            "https://${HF_USERNAME}:${HF_TOKEN}@huggingface.co/spaces/${HF_USERNAME}/${HF_SPACE_NAME}" \
+            HEAD:main
+
+      - name: Attendre le redemarrage et verifier
+        env:
+          HF_USERNAME: ${{ secrets.HF_USERNAME }}
+          HF_SPACE_NAME: ${{ secrets.HF_SPACE_NAME }}
+        run: |
+          URL="https://${HF_USERNAME}-${HF_SPACE_NAME}.hf.space/health"
+          echo "Verification de $URL"
+          echo "Hugging Face reconstruit l'image : cela prend 2 a 5 minutes."
+          for i in $(seq 1 40); do
+            if curl -fsS "$URL" | grep -q '"model_loaded":true'; then
+              echo "Deploiement verifie apres $((i*15))s"
+              curl -s "$URL"
+              exit 0
+            fi
+            sleep 15
+          done
+          echo "L'API n'a pas repondu dans le delai imparti."
+          echo "Verifie les logs de build sur https://huggingface.co/spaces/${HF_USERNAME}/${HF_SPACE_NAME}"
+          exit 1
+
+      - name: Recapitulatif
+        if: always()
+        env:
+          HF_USERNAME: ${{ secrets.HF_USERNAME }}
+          HF_SPACE_NAME: ${{ secrets.HF_SPACE_NAME }}
+        run: |
+          {
+            echo "## Deploiement termine"
+            echo ""
+            echo "| Element | Valeur |"
+            echo "|---|---|"
+            echo "| Commit | \`${GITHUB_SHA::7}\` |"
+            echo "| Space | https://huggingface.co/spaces/${HF_USERNAME}/${HF_SPACE_NAME} |"
+            echo "| API | https://${HF_USERNAME}-${HF_SPACE_NAME}.hf.space |"
+            echo "| Documentation | https://${HF_USERNAME}-${HF_SPACE_NAME}.hf.space/docs |"
+          } >> $GITHUB_STEP_SUMMARY

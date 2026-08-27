@@ -1,0 +1,20 @@
+services:
+  api:
+    build: .
+    image: scoring-api:1.0.0
+    container_name: scoring-api
+    ports:
+      - "8000:7860"
+    environment:
+      LOG_DIR: /tmp/logs
+      INFERENCE_BACKEND: lightgbm
+    volumes:
+      # Les logs remontent sur ta machine, pour l'analyse de drift
+      - ./logs:/tmp/logs
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:7860/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+    restart: unless-stopped

@@ -1,0 +1,41 @@
+# Environnements
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Git
+.git/
+.github/
+.gitignore
+
+# Donnees et artefacts lourds
+data/raw/
+data/processed/
+*.csv
+*.zip
+mlruns/
+mlartifacts/
+mlflow.db
+
+# Developpement uniquement
+notebooks/
+tests/
+scripts/
+monitoring/
+docs/
+screenshots/
+requirements-dev.txt
+pytest.ini
+
+# Logs locaux
+logs/
+*.jsonl
+
+# Editeurs
+.vscode/
+.idea/
+.DS_Store
